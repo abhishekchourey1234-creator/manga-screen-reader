@@ -13,42 +13,75 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Generate Code via Free Gemini API
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          python3 -c "
-          import urllib.request, json, os
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-          prompt = '''You are an expert Android developer. Return ONLY a single raw JSON object with no markdown formatting, no backticks, and no code blocks.
-          The JSON keys must be relative file paths, and the values must be file contents.
-          Generate:
+      - name: Create Generator Script
+        run: |
+          cat << 'EOF' > generate.py
+          import urllib.request
+          import urllib.error
+          import json
+          import os
+          import sys
+
+          api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+          if not api_key:
+              print("::error::GEMINI_API_KEY secret is not set!")
+              sys.exit(1)
+
+          prompt = """Return ONLY a single valid raw JSON dictionary. Do not wrap in markdown or backticks.
+          Keys are file paths, values are full file contents for an Android Kotlin project:
           1. settings.gradle.kts
           2. build.gradle.kts
-          3. app/build.gradle.kts (with compileSdk 34, com.google.mlkit:text-recognition-japanese:16.0.1, androidx)
-          4. app/src/main/AndroidManifest.xml (with SYSTEM_ALERT_WINDOW, FOREGROUND_SERVICE, FOREGROUND_SERVICE_MEDIA_PROJECTION)
-          5. app/src/main/java/com/example/mangareader/MainActivity.kt (requesting overlay and MediaProjection permissions)
-          6. app/src/main/java/com/example/mangareader/ScreenReaderService.kt (floating chathead, ImageReader frame capture, ML Kit Japanese text recognition, Android TextToSpeech playback)
-          7. .github/workflows/build-apk.yml (actions/checkout@v4, setup-java@v4 zulu 17, gradle :app:assembleDebug, upload-artifact@v4)'''
+          3. app/build.gradle.kts (compileSdk 34, com.google.mlkit:text-recognition-japanese:16.0.1, androidx)
+          4. app/src/main/AndroidManifest.xml (SYSTEM_ALERT_WINDOW, FOREGROUND_SERVICE, FOREGROUND_SERVICE_MEDIA_PROJECTION)
+          5. app/src/main/java/com/example/mangareader/MainActivity.kt
+          6. app/src/main/java/com/example/mangareader/ScreenReaderService.kt (overlay chathead, ImageReader capture, ML Kit Japanese text recognition, Android TextToSpeech)
+          7. .github/workflows/build-apk.yml (actions/checkout@v4, setup-java@v4 zulu 17, gradle :app:assembleDebug, upload-artifact@v4)"""
 
-          url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={os.environ[\"GEMINI_API_KEY\"]}'
-          payload = {'contents': [{'parts': [{'text': prompt}]}], 'generationConfig': {'response_mime_type': 'application/json'}}
+          url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+          payload = {
+              "contents": [{"parts": [{"text": prompt}]}],
+              "generationConfig": {"response_mime_type": "application/json"}
+          }
 
-          req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers={'Content-Type': 'application/json'})
-          with urllib.request.urlopen(req) as resp:
-              result = json.loads(resp.read().decode('utf-8'))
-              files = json.loads(result['candidates'][0]['content']['parts'][0]['text'])
+          try:
+              req = urllib.request.Request(
+                  url,
+                  data=json.dumps(payload).encode("utf-8"),
+                  headers={"Content-Type": "application/json"}
+              )
+              with urllib.request.urlopen(req) as resp:
+                  res = json.loads(resp.read().decode("utf-8"))
+                  raw_text = res["candidates"][0]["content"]["parts"][0]["text"].strip()
+                  files = json.loads(raw_text)
 
-          for path, content in files.items():
-              os.makedirs(os.path.dirname(path), exist_ok=True)
-              with open(path, 'w', encoding='utf-8') as f:
-                  f.write(content)
-          "
+              for path, content in files.items():
+                  os.makedirs(os.path.dirname(path), exist_ok=True)
+                  with open(path, "w", encoding="utf-8") as f:
+                      f.write(content)
+                  print(f"Created: {path}")
 
-      - name: Commit and Push Generated Code
+          except urllib.error.HTTPError as err:
+              print(f"::error::API Error {err.code}: {err.read().decode('utf-8')}")
+              sys.exit(1)
+          except Exception as e:
+              print(f"::error::Failed: {e}")
+              sys.exit(1)
+          EOF
+
+      - name: Generate Code
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python generate.py
+
+      - name: Commit and Push
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add .
-          git commit -m "Auto-generate Manga Reader app files" || exit 0
+          git commit -m "Auto-generate Manga Reader app" || exit 0
           git push origin main
