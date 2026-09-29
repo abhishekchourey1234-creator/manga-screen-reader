@@ -407,10 +407,10 @@ jobs:
                     path: app/build/outputs/apk/debug/app-debug.apk
           EOF
 
-      - name: Commit and Push Project Files
+                  - name: Commit and Push Project Files
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add .
           git commit -m "Add complete Manga Reader project files" || exit 0
-          git push origin main
+          git push origin HEAD
