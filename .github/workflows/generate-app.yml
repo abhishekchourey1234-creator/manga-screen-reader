@@ -10,10 +10,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Create Project Files
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK Licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Generate Source Files
         run: |
           mkdir -p app/src/main/java/com/example/mangareader
 
+          # 1. settings.gradle.kts
           cat << 'EOF' > settings.gradle.kts
           pluginManagement {
               repositories {
@@ -33,13 +46,15 @@ jobs:
           include(":app")
           EOF
 
+          # 2. root build.gradle.kts
           cat << 'EOF' > build.gradle.kts
           plugins {
-              id("com.android.application") version "8.3.2" apply false
+              id("com.android.application") version "8.2.2" apply false
               id("org.jetbrains.kotlin.android") version "1.9.22" apply false
           }
           EOF
 
+          # 3. app/build.gradle.kts
           cat << 'EOF' > app/build.gradle.kts
           plugins {
               id("com.android.application")
@@ -64,16 +79,160 @@ jobs:
               }
           }
           dependencies {
-              implementation("androidx.core:core-ktx:1.13.1")
-              implementation("androidx.appcompat:appcompat:1.7.0")
-              implementation("com.google.android.material:material:1.12.0")
-              implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
+              implementation("androidx.core:core-ktx:1.12.0")
+              implementation("androidx.appcompat:appcompat:1.6.1")
+              implementation("com.google.android.material:material:1.11.0")
+              implementation("com.google.mlkit:text-recognition-japanese:16.0.0")
           }
           EOF
 
+          # 4. AndroidManifest.xml
           cat << 'EOF' > app/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+              <application
+                  android:allowBackup="true"
+                  android:label="Manga Reader"
+                  android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <service
+                      android:name=".ScreenReaderService"
+                      android:enabled="true"
+                      android:exported="false"
+                      android:foregroundServiceType="mediaProjectionThe failure happens because Gradle fails to build the Android project. In GitHub Actions, when Android Gradle Plugin (AGP) 8.3+ runs on raw Ubuntu:
+1. Android Gradle Plugin **refuses to build without accepting Android SDK licenses**.
+2. Standalone global `gradle` invocation lacks the official Gradle Wrapper scripts (`gradlew`) and fails Kotlin compilation targets unless SDK paths and toolchains are strictly preset.
+3. The cache warnings show Gradle setup hit permission/cache conflicts on the runner.
+
+Here is the single workflow file that fixes this permanently. It sets up the official Android SDK environment, automatically accepts all Android licenses, creates a clean lightweight Java/Kotlin setup, and produces the debug APK without permission hurdles.
+
+---
+
+### Replace `.github/workflows/generate-app.yml` with this exact code:
+
+```yaml
+name: Build Manga Reader APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android Licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Generate Project Files
+        run: |
+          mkdir -p gradle/wrapper
+          mkdir -p app/src/main/java/com/example/mangareader
+
+          # 1. settings.gradle
+          cat << 'EOF' > settings.gradle
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "MangaScreenReader"
+          include ':app'
+          EOF
+
+          # 2. root build.gradle
+          cat << 'EOF' > build.gradle
+          buildscript {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:8.2.2'
+                  classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22'
+              }
+          }
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          EOF
+
+          # 3. app/build.gradle
+          cat << 'EOF' > app/build.gradle
+          apply plugin: 'com.android.application'
+          apply plugin: 'kotlin-android'
+
+          android {
+              namespace 'com.example.mangareader'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "com.example.mangareader"
+                  minSdk 26
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+          }
+
+          dependencies {
+              implementation 'androidx.core:core-ktx:1.12.0'
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation 'com.google.android.material:material:1.11.0'
+              implementation 'com.google.mlkit:text-recognition-japanese:16.0.0'
+          }
+          EOF
+
+          # 4. AndroidManifest.xml
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="[http://schemas.android.com/apk/res/android](http://schemas.android.com/apk/res/android)">
               <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
@@ -98,6 +257,7 @@ jobs:
           </manifest>
           EOF
 
+          # 5. MainActivity.kt
           cat << 'EOF' > app/src/main/java/com/example/mangareader/MainActivity.kt
           package com.example.mangareader
 
@@ -159,6 +319,7 @@ jobs:
           }
           EOF
 
+          # 6. ScreenReaderService.kt
           cat << 'EOF' > app/src/main/java/com/example/mangareader/ScreenReaderService.kt
           package com.example.mangareader
 
@@ -365,21 +526,13 @@ jobs:
           }
           EOF
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - name: Build with Gradle
+        uses: gradle/gradle-build-action@v3
         with:
-          distribution: 'zulu'
-          java-version: '17'
+          gradle-version: 8.4
+          arguments: assembleDebug --no-daemon --stacktrace
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: 8.6
-
-      - name: Compile Manga Reader APK
-        run: gradle :app:assembleDebug --stacktrace
-
-      - name: Upload APK Artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: MangaReader-Debug-APK
