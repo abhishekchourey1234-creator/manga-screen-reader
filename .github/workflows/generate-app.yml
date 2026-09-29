@@ -1,0 +1,54 @@
+name: Generate Manga Reader App
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate Code via Free Gemini API
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python3 -c "
+          import urllib.request, json, os
+
+          prompt = '''You are an expert Android developer. Return ONLY a single raw JSON object with no markdown formatting, no backticks, and no code blocks.
+          The JSON keys must be relative file paths, and the values must be file contents.
+          Generate:
+          1. settings.gradle.kts
+          2. build.gradle.kts
+          3. app/build.gradle.kts (with compileSdk 34, com.google.mlkit:text-recognition-japanese:16.0.1, androidx)
+          4. app/src/main/AndroidManifest.xml (with SYSTEM_ALERT_WINDOW, FOREGROUND_SERVICE, FOREGROUND_SERVICE_MEDIA_PROJECTION)
+          5. app/src/main/java/com/example/mangareader/MainActivity.kt (requesting overlay and MediaProjection permissions)
+          6. app/src/main/java/com/example/mangareader/ScreenReaderService.kt (floating chathead, ImageReader frame capture, ML Kit Japanese text recognition, Android TextToSpeech playback)
+          7. .github/workflows/build-apk.yml (actions/checkout@v4, setup-java@v4 zulu 17, gradle :app:assembleDebug, upload-artifact@v4)'''
+
+          url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={os.environ[\"GEMINI_API_KEY\"]}'
+          payload = {'contents': [{'parts': [{'text': prompt}]}], 'generationConfig': {'response_mime_type': 'application/json'}}
+
+          req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers={'Content-Type': 'application/json'})
+          with urllib.request.urlopen(req) as resp:
+              result = json.loads(resp.read().decode('utf-8'))
+              files = json.loads(result['candidates'][0]['content']['parts'][0]['text'])
+
+          for path, content in files.items():
+              os.makedirs(os.path.dirname(path), exist_ok=True)
+              with open(path, 'w', encoding='utf-8') as f:
+                  f.write(content)
+          "
+
+      - name: Commit and Push Generated Code
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "Auto-generate Manga Reader app files" || exit 0
+          git push origin main
